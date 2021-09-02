@@ -29,7 +29,7 @@
             "program": "${workspaceFolder}/bin/Debug/net5.0/MAVLink-test.dll",
             "args": [],
             "cwd": "${workspaceFolder}",
-            "console": "internalConsole",
+            "console": "integratedTerminal",
             "stopAtEntry": false
         },
         {

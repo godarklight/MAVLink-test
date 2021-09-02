@@ -1,98 +1,231 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Net.Sockets;
 using System.Net;
-using System.Threading.Tasks;
-using System.Diagnostics;
+using System.Threading;
 
 namespace TcpServer
 {
-    [DebuggerDisplay("{" + nameof(GetDebuggerDisplay) + "(),nq}")]
     class Program
     {
-        static void Main(string[] args)
+        private static AutoResetEvent are = new AutoResetEvent(false);
+        private static ConcurrentQueue<byte[]> sendMessages = new ConcurrentQueue<byte[]>();
+        private static long nextHeartbeatSendTime;
+        private static long nextSensorSendTime;
+        private static TcpClient sender;
+        private static bool running = true;
+        private static MAVLink.MavlinkParse parser = new MAVLink.MavlinkParse();
+        private static int sendSequence = 0;
+        private static int sensorSequence = 0;
+        private static long startTime;
+
+        public static void Main(string[] args)
         {
-            MAVLink mav = new MAVLink();
-            byte[] buffer = new byte[263];
+            startTime = DateTime.UtcNow.Ticks;
+
             IPEndPoint ep = new IPEndPoint(IPAddress.Any, 5760);
             TcpListener listener = new TcpListener(ep);
             listener.Start();
 
             Console.WriteLine(@"Address: " + ep.Address + "\t Port: " + ep.Port);
-            TcpClient sender = listener.AcceptTcpClient();
+            sender = listener.AcceptTcpClient();
             Console.WriteLine("Connected");
 
-            // Run the loop continously; this is the server.
-            bool readingHeader = true;
-            int bytesLeft = 8;
-            int readPos = 0;
-            while (true)
+            Thread receiveThread = new Thread(new ThreadStart(ReceiveMain));
+            receiveThread.Start();
+            Thread sendThread = new Thread(new ThreadStart(SendMain));
+            sendThread.Start();
+
+            while (running)
             {
-                int bytesRead = sender.GetStream().Read(buffer, readPos, bytesLeft);
-                readPos += bytesRead;
-                bytesLeft -= bytesRead;
-                if (bytesRead == 0)
+                if (Console.KeyAvailable)
                 {
-                    //Disconnect
-                    return;
-                }
-                if (bytesLeft == 0)
-                {
-                    if (readingHeader)
+                    ConsoleKeyInfo cki = Console.ReadKey(false);
+                    if (cki.KeyChar == 'q')
                     {
-                        readingHeader = false;
-                        bytesLeft = buffer[1];
-                    }
-                    else
-                    {
-                        //Process buffer here
-                        MAVLink.MAVLinkMessage mlm = new MAVLink.MAVLinkMessage(buffer);
-                        string hexString = BitConverter.ToString(buffer, 0, readPos);
-                        Console.WriteLine(mlm.msgtypename + ": " + hexString.Replace('-', ' '));
-                        Console.WriteLine("===");
-
-                        readingHeader = true;
-                        readPos = 0;
-                        bytesLeft = 8;
+                        running = false;
                     }
                 }
+                Thread.Sleep(50);
+            }
 
-                // I have no clue on how to make it into a MAVLink packet
-                //var packet = MavlinkUtil.ByteArrayToStructure
+            sendThread.Join();
+            receiveThread.Join();
+            Console.WriteLine("Bye!");
+        }
 
+        private static void SendMessage(MAVLink.MAVLINK_MSG_ID messageType, object message)
+        {
+            byte[] sendBytes = parser.GenerateMAVLinkPacket10(messageType, message, 254, (byte)MAVLink.MAV_COMPONENT.MAV_COMP_ID_AUTOPILOT1, sendSequence);
+            sendSequence++;
+            sendMessages.Enqueue(sendBytes);
+        }
 
-                // |===============================|
-                // ||          TODO LIST          ||
-                // |===============================|
-                // ||     MAKE HEARTBEAT (1hz)    ||
-                // ||  INTERPRET INCOMMING DATA   ||
-                // ||  GET RID OF THE WHILE LOOP  ||
-                // ||  SEND ACK TO GCS AS RETURN  ||
-                // ||                             ||
-                // ||                             ||
-                // ||                             ||
-                // ||                             ||
-                // ||                             ||
-                // |===============================|
+        private static void ProcessMessage(MAVLink.MAVLinkMessage message)
+        {
+            Console.WriteLine($"Receiving {message.msgtypename} {message.payloadlength}");
+        }
 
-                // |===============================|
-                // ||   TODO LIST LONG(ER) TERM   ||
-                // |===============================|
-                // ||  GET PLANE ROLL AND PITCH   ||
-                // ||    MAKE A SOFTQARE IMU      ||
-                // ||     GET PLANE ALTITUDE      ||
-                // ||     GET PLANE THROTTLE      ||
-                // ||  GET BATTERY/FUEL REMANING  ||
-                // ||                             ||
-                // ||                             ||
-                // ||                             ||
-                // |===============================|
-
+        private static void CheckSendHeartbeat()
+        {
+            long currentTime = DateTime.UtcNow.Ticks;
+            if (currentTime > nextHeartbeatSendTime)
+            {
+                nextHeartbeatSendTime = currentTime + TimeSpan.TicksPerSecond;
+                MAVLink.mavlink_heartbeat_t message = new MAVLink.mavlink_heartbeat_t(0, (byte)MAVLink.MAV_TYPE.FIXED_WING, (byte)MAVLink.MAV_AUTOPILOT.ARDUPILOTMEGA, (byte)MAVLink.MAV_MODE.AUTO_ARMED, (byte)MAVLink.MAV_STATE.ACTIVE, (byte)MAVLink.MAVLINK_VERSION);
+                SendMessage(MAVLink.MAVLINK_MSG_ID.HEARTBEAT, message);
             }
         }
 
-        private string GetDebuggerDisplay()
+        private static void CheckSensor()
         {
-            return ToString();
+            long currentTime = DateTime.UtcNow.Ticks;
+            if (currentTime > nextSensorSendTime)
+            {
+                uint uptime = (uint)((DateTime.UtcNow.Ticks - startTime) / TimeSpan.TicksPerMillisecond);
+
+                nextSensorSendTime = currentTime + 500 * TimeSpan.TicksPerMillisecond;
+                ushort[] voltages = new ushort[10];
+                voltages[0] = 3700;
+                voltages[1] = 3750;
+                voltages[2] = 3650;
+                ushort[] voltages2 = new ushort[4];
+                MAVLink.mavlink_battery_status_t batMsg = new MAVLink.mavlink_battery_status_t(sendSequence, -1, 6000, voltages, 3, 0, (byte)MAVLink.MAV_BATTERY_FUNCTION.ALL, (byte)MAVLink.MAV_BATTERY_TYPE.LIPO, 66, 1000 - sensorSequence, (byte)MAVLink.MAV_BATTERY_CHARGE_STATE.OK, voltages2, (byte)MAVLink.MAV_BATTERY_MODE.UNKNOWN, 0);
+                SendMessage(MAVLink.MAVLINK_MSG_ID.BATTERY_STATUS, batMsg);
+
+                MAVLink.mavlink_global_position_int_t gpsMsg = new MAVLink.mavlink_global_position_int_t(uptime, 1 + sensorSequence / 1000, 1 + sensorSequence / 1000, 9001, 9001, 51, 52, 0, (ushort)(sensorSequence % 360));
+                SendMessage(MAVLink.MAVLINK_MSG_ID.GLOBAL_POSITION_INT, gpsMsg);
+
+                byte[] prns = new byte[20];
+                byte[] used = new byte[20];
+                byte[] ele = new byte[20];
+                byte[] azith = new byte[20];
+                byte[] snr = new byte[20];
+                for (int i = 0; i < 10; i++)
+                {
+                    snr[i] = 10;
+                    if (i <= 5)
+                    {
+                        used[i] = 1;
+                        snr[i] = 40;
+                    }
+                    prns[i] = (byte)i;
+                    ele[i] = (byte)(30 + i * 5);
+                    azith[i] = (byte)(10 + i * 10);
+
+                }
+                MAVLink.mavlink_gps_status_t gpsStatusMsg = new MAVLink.mavlink_gps_status_t((byte)5, prns, used, ele, azith, snr);
+                SendMessage(MAVLink.MAVLINK_MSG_ID.GPS_STATUS, gpsStatusMsg);
+
+
+                MAVLink.mavlink_attitude_t attitudeMsg = new MAVLink.mavlink_attitude_t(uptime, -1 + (sensorSequence / 20f), -1 + (sensorSequence / 20f), -1 + (sensorSequence / 100f), 0, 0, 0);
+                SendMessage(MAVLink.MAVLINK_MSG_ID.ATTITUDE, attitudeMsg);
+                sensorSequence++;
+            }            
+        }
+
+        private static void ReceiveMain()
+        {
+            byte[] buffer = new byte[263];
+            bool readingHeader = true;
+            //Packet framing is 8 bytes
+            int bytesLeft = 8;
+            int readPos = 0;
+            NetworkStream ns = sender.GetStream();
+            while (running)
+            {
+                try
+                {
+                    int bytesRead = ns.Read(buffer, readPos, bytesLeft);
+                    readPos += bytesRead;
+                    bytesLeft -= bytesRead;
+                    if (bytesRead == 0)
+                    {
+                        //Disconnect
+                        running = false;
+                        return;
+                    }
+                    if (bytesLeft == 0)
+                    {
+                        if (readingHeader)
+                        {
+                            bytesLeft = buffer[1];
+                            if (bytesLeft == 0)
+                            {
+                                //Process 0 byte messages
+                                MAVLink.MAVLinkMessage mlm = new MAVLink.MAVLinkMessage(buffer);
+                                ProcessMessage(mlm);
+                                readingHeader = true;
+                                readPos = 0;
+                                bytesLeft = 8;
+                            }
+                            else
+                            {
+                                readingHeader = false;
+                            }
+                        }
+                        else
+                        {
+                            //Process messages with a payload
+                            MAVLink.MAVLinkMessage mlm = new MAVLink.MAVLinkMessage(buffer);
+                            ProcessMessage(mlm);
+                            readingHeader = true;
+                            readPos = 0;
+                            bytesLeft = 8;
+                        }
+                    }
+                }
+                catch (Exception e)
+                {
+                    Console.WriteLine("Receive error: " + e.Message);
+                    running = false;
+                }
+            }
+        }
+
+        private static void SendMain()
+        {
+            NetworkStream ns = sender.GetStream();
+            while (running)
+            {
+                are.WaitOne(50);
+                if (sendMessages.TryDequeue(out byte[] message))
+                {
+                    MAVLink.MAVLinkMessage sendMessageTest = new MAVLink.MAVLinkMessage(message);
+                    Console.WriteLine($"Sending {sendMessageTest.msgtypename} {sendMessageTest.payloadlength}");
+                    ns.Write(message, 0, message.Length);
+                }
+                CheckSendHeartbeat();
+                CheckSensor();
+            }
         }
     }
 }
+
+// |===============================|
+// ||          TODO LIST          ||
+// |===============================|
+// ||     MAKE HEARTBEAT (1hz)    ||
+// ||  INTERPRET INCOMMING DATA   ||
+// ||  GET RID OF THE WHILE LOOP  ||
+// ||  SEND ACK TO GCS AS RETURN  ||
+// ||                             ||
+// ||                             ||
+// ||                             ||
+// ||                             ||
+// ||                             ||
+// |===============================|
+
+// |===============================|
+// ||   TODO LIST LONG(ER) TERM   ||
+// |===============================|
+// ||  GET PLANE ROLL AND PITCH   ||
+// ||    MAKE A SOFTQARE IMU      ||
+// ||     GET PLANE ALTITUDE      ||
+// ||     GET PLANE THROTTLE      ||
+// ||  GET BATTERY/FUEL REMANING  ||
+// ||                             ||
+// ||                             ||
+// ||                             ||
+// |===============================|
