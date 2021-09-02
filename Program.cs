@@ -80,7 +80,8 @@ namespace TcpServer
                 MAVLink.mavlink_sys_status_t sysStatus = new MAVLink.mavlink_sys_status_t(sensors, sensors, sensors, 10, 11000, 300, 0, 0, 0, 0, 0, 0, 34);
                 SendMessage(MAVLink.MAVLINK_MSG_ID.SYS_STATUS, message);
 
-                ulong unixTime = (ulong)(DateTime.UtcNow - DateTime.UnixEpoch).TotalSeconds;
+                DateTime epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+                ulong unixTime = (ulong)(DateTime.UtcNow - epoch).TotalSeconds;
                 uint uptime = (uint)((DateTime.UtcNow.Ticks - startTime) / TimeSpan.TicksPerMillisecond);
                 MAVLink.mavlink_system_time_t sysTime = new MAVLink.mavlink_system_time_t(unixTime, uptime);
                 SendMessage(MAVLink.MAVLINK_MSG_ID.SYSTEM_TIME, sysTime);
@@ -127,12 +128,12 @@ namespace TcpServer
                 MAVLink.mavlink_gps_status_t gpsStatusMsg = new MAVLink.mavlink_gps_status_t((byte)5, prns, used, ele, azith, snr);
                 SendMessage(MAVLink.MAVLINK_MSG_ID.GPS_STATUS, gpsStatusMsg);
 
-                MAVLink.mavlink_gps_raw_int_t gpsRaw = new MAVLink.mavlink_gps_raw_int_t(uptime, 100000, 1000000, 9000, 300,300,900, 9000, (byte)MAVLink.GPS_FIX_TYPE._3D_FIX, 5, 9000, 0, 0, 0, 0, 0);
+                MAVLink.mavlink_gps_raw_int_t gpsRaw = new MAVLink.mavlink_gps_raw_int_t(uptime, 100000, 1000000, 9000, 300, 300, 900, 9000, (byte)MAVLink.GPS_FIX_TYPE._3D_FIX, 5, 9000, 0, 0, 0, 0, 0);
                 SendMessage(MAVLink.MAVLINK_MSG_ID.GPS_RAW_INT, gpsRaw);
 
                 MAVLink.mavlink_attitude_t attitudeMsg = new MAVLink.mavlink_attitude_t(uptime, -1 + (sensorSequence / 20f), -1 + (sensorSequence / 20f), -1 + (sensorSequence / 100f), 0, 0, 0);
                 SendMessage(MAVLink.MAVLINK_MSG_ID.ATTITUDE, attitudeMsg);
-                
+
 
                 //MAVLink.mavlink_radio_status_t radioMsg = new MAVLink.mavlink_radio_status_t(0, 0, 254, 254, 100, 255, 255);
                 //SendMessage(MAVLink.MAVLINK_MSG_ID.RADIO_STATUS, radioMsg);
