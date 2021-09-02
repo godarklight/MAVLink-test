@@ -57,7 +57,7 @@ namespace TcpServer
 
         private static void SendMessage(MAVLink.MAVLINK_MSG_ID messageType, object message)
         {
-            byte[] sendBytes = parser.GenerateMAVLinkPacket10(messageType, message, 254, (byte)MAVLink.MAV_COMPONENT.MAV_COMP_ID_AUTOPILOT1, sendSequence);
+            byte[] sendBytes = parser.GenerateMAVLinkPacket10(messageType, message, 1, (byte)MAVLink.MAV_COMPONENT.MAV_COMP_ID_AUTOPILOT1, sendSequence);
             sendSequence++;
             sendMessages.Enqueue(sendBytes);
         }
@@ -75,6 +75,15 @@ namespace TcpServer
                 nextHeartbeatSendTime = currentTime + TimeSpan.TicksPerSecond;
                 MAVLink.mavlink_heartbeat_t message = new MAVLink.mavlink_heartbeat_t(0, (byte)MAVLink.MAV_TYPE.FIXED_WING, (byte)MAVLink.MAV_AUTOPILOT.ARDUPILOTMEGA, (byte)MAVLink.MAV_MODE.AUTO_ARMED, (byte)MAVLink.MAV_STATE.ACTIVE, (byte)MAVLink.MAVLINK_VERSION);
                 SendMessage(MAVLink.MAVLINK_MSG_ID.HEARTBEAT, message);
+
+                uint sensors = (uint)(MAVLink.MAV_SYS_STATUS_SENSOR._3D_GYRO | MAVLink.MAV_SYS_STATUS_SENSOR._3D_ACCEL | MAVLink.MAV_SYS_STATUS_SENSOR._3D_MAG | MAVLink.MAV_SYS_STATUS_SENSOR.ABSOLUTE_PRESSURE | MAVLink.MAV_SYS_STATUS_SENSOR.BATTERY | MAVLink.MAV_SYS_STATUS_SENSOR.GPS);
+                MAVLink.mavlink_sys_status_t sysStatus = new MAVLink.mavlink_sys_status_t(sensors, sensors, sensors, 10, 11000, 300, 0, 0, 0, 0, 0, 0, 34);
+                SendMessage(MAVLink.MAVLINK_MSG_ID.SYS_STATUS, message);
+
+                ulong unixTime = (ulong)(DateTime.UtcNow - DateTime.UnixEpoch).TotalSeconds;
+                uint uptime = (uint)((DateTime.UtcNow.Ticks - startTime) / TimeSpan.TicksPerMillisecond);
+                MAVLink.mavlink_system_time_t sysTime = new MAVLink.mavlink_system_time_t(unixTime, uptime);
+                SendMessage(MAVLink.MAVLINK_MSG_ID.SYSTEM_TIME, sysTime);
             }
         }
 
@@ -118,11 +127,21 @@ namespace TcpServer
                 MAVLink.mavlink_gps_status_t gpsStatusMsg = new MAVLink.mavlink_gps_status_t((byte)5, prns, used, ele, azith, snr);
                 SendMessage(MAVLink.MAVLINK_MSG_ID.GPS_STATUS, gpsStatusMsg);
 
+                MAVLink.mavlink_gps_raw_int_t gpsRaw = new MAVLink.mavlink_gps_raw_int_t(uptime, 100000, 1000000, 9000, 300,300,900, 9000, (byte)MAVLink.GPS_FIX_TYPE._3D_FIX, 5, 9000, 0, 0, 0, 0, 0);
+                SendMessage(MAVLink.MAVLINK_MSG_ID.GPS_RAW_INT, gpsRaw);
 
                 MAVLink.mavlink_attitude_t attitudeMsg = new MAVLink.mavlink_attitude_t(uptime, -1 + (sensorSequence / 20f), -1 + (sensorSequence / 20f), -1 + (sensorSequence / 100f), 0, 0, 0);
                 SendMessage(MAVLink.MAVLINK_MSG_ID.ATTITUDE, attitudeMsg);
+                
+
+                //MAVLink.mavlink_radio_status_t radioMsg = new MAVLink.mavlink_radio_status_t(0, 0, 254, 254, 100, 255, 255);
+                //SendMessage(MAVLink.MAVLINK_MSG_ID.RADIO_STATUS, radioMsg);
+
+                MAVLink.mavlink_rc_channels_t rcChannels = new MAVLink.mavlink_rc_channels_t(uptime, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 4, 200);
+                SendMessage(MAVLink.MAVLINK_MSG_ID.RC_CHANNELS, rcChannels);
+
                 sensorSequence++;
-            }            
+            }
         }
 
         private static void ReceiveMain()
@@ -194,7 +213,15 @@ namespace TcpServer
                 {
                     MAVLink.MAVLinkMessage sendMessageTest = new MAVLink.MAVLinkMessage(message);
                     Console.WriteLine($"Sending {sendMessageTest.msgtypename} {sendMessageTest.payloadlength}");
-                    ns.Write(message, 0, message.Length);
+                    try
+                    {
+                        ns.Write(message, 0, message.Length);
+                    }
+                    catch
+                    {
+                        running = false;
+                        return;
+                    }
                 }
                 CheckSendHeartbeat();
                 CheckSensor();
