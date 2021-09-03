@@ -19,6 +19,8 @@ namespace TcpServer
         private static int sendSequence = 0;
         private static int sensorSequence = 0;
         private static long startTime;
+        private static Dictionary<MAVLink.MAVLINK_MSG_ID, float> setIntervals = new Dictionary<MAVLink.MAVLINK_MSG_ID, float>();
+        private static Dictionary<MAVLink.MAVLINK_MSG_ID, long> nextSend = new Dictionary<MAVLink.MAVLINK_MSG_ID, long>();
 
         public static void Main(string[] args)
         {
@@ -64,7 +66,89 @@ namespace TcpServer
 
         private static void ProcessMessage(MAVLink.MAVLinkMessage message)
         {
-            Console.WriteLine($"Receiving {message.msgtypename} {message.payloadlength}");
+            //Console.WriteLine($"Receiving {message.msgtypename} {message.payloadlength}");
+            bool processed = false;
+            if (message.msgtypename == "HEARTBEAT")
+            {
+                processed = true;
+            }
+            if (message.msgtypename == "COMMAND_LONG")
+            {
+                processed = true;
+                ProcessCommand(message);
+            }
+            if (message.msgtypename == "REQUEST_DATA_STREAM")
+            {
+                MAVLink.mavlink_request_data_stream_t rds = (MAVLink.mavlink_request_data_stream_t)message.data;
+                processed = true;
+                Console.WriteLine($"Requests stream {(MAVLink.MAV_DATA_STREAM)rds.req_stream_id} at rate {rds.req_message_rate}");
+            }
+            if (message.msgtypename == "PARAM_REQUEST_LIST")
+            {
+                //Do stuff here
+            }
+            if (!processed)
+            {
+                Console.WriteLine($"Unprocessed message! {message.msgtypename}");
+            }
+        }
+
+        private static void ProcessCommand(MAVLink.MAVLinkMessage message)
+        {
+            bool processed = false;
+            MAVLink.mavlink_command_long_t command = (MAVLink.mavlink_command_long_t)message.data;
+
+            if (command.command == 511)
+            {
+                AckCommand(command, MAVLink.MAV_CMD_ACK.OK);
+                MAVLink.MAVLINK_MSG_ID commandID = (MAVLink.MAVLINK_MSG_ID)command.param1;                
+                setIntervals[commandID] = command.param2;
+                Console.WriteLine($"Command {commandID} set to {command.param2}us");
+                processed = true;
+            }
+            if (command.command == 519)
+            {
+                processed = true;
+                AckCommand(command, MAVLink.MAV_CMD_ACK.OK);
+                //TODO: Set this
+                byte[] supportedVersion = new byte[8];
+                MAVLink.mavlink_protocol_version_t protocolVersion = new MAVLink.mavlink_protocol_version_t(100, 100, 100, supportedVersion, supportedVersion);
+                SendMessage(MAVLink.MAVLINK_MSG_ID.PROTOCOL_VERSION, protocolVersion);
+            }
+            if (command.command == 520)
+            {
+                AckCommand(command, MAVLink.MAV_CMD_ACK.OK);
+                ulong cap = (ulong)MAVLink.MAV_PROTOCOL_CAPABILITY.MISSION_FLOAT;
+                cap = cap | (ulong)MAVLink.MAV_PROTOCOL_CAPABILITY.PARAM_FLOAT;
+                cap = cap | (ulong)MAVLink.MAV_PROTOCOL_CAPABILITY.MISSION_INT;
+                cap = cap | (ulong)MAVLink.MAV_PROTOCOL_CAPABILITY.COMMAND_INT;
+                cap = cap | (ulong)MAVLink.MAV_PROTOCOL_CAPABILITY.PARAM_UNION;
+                cap = cap | (ulong)MAVLink.MAV_PROTOCOL_CAPABILITY.SET_ATTITUDE_TARGET;
+                cap = cap | (ulong)MAVLink.MAV_PROTOCOL_CAPABILITY.SET_POSITION_TARGET_LOCAL_NED;
+                cap = cap | (ulong)MAVLink.MAV_PROTOCOL_CAPABILITY.SET_POSITION_TARGET_GLOBAL_INT;
+                cap = cap | (ulong)MAVLink.MAV_PROTOCOL_CAPABILITY.TERRAIN;
+                cap = cap | (ulong)MAVLink.MAV_PROTOCOL_CAPABILITY.FLIGHT_INFORMATION;
+                cap = cap | (ulong)MAVLink.MAV_PROTOCOL_CAPABILITY.FLIGHT_TERMINATION;
+                cap = cap | (ulong)MAVLink.MAV_PROTOCOL_CAPABILITY.MISSION_FENCE;
+                cap = cap | (ulong)MAVLink.MAV_PROTOCOL_CAPABILITY.MISSION_RALLY;
+                byte[] v1 = new byte[8];
+                v1[0] = 1;
+
+                MAVLink.mavlink_autopilot_version_t apVersion = new MAVLink.mavlink_autopilot_version_t(cap, 1, 1, 1, 1, 1, 1, 1, v1, v1, v1, v1);
+                SendMessage(MAVLink.MAVLINK_MSG_ID.AUTOPILOT_VERSION, apVersion);
+                processed = true;
+            }
+            if (!processed)
+            {
+                AckCommand(command, MAVLink.MAV_CMD_ACK.ERR_NOT_SUPPORTED);
+                Console.WriteLine($"Unprocessed command - {command.command}");
+            }
+        }
+
+        private static void AckCommand(MAVLink.mavlink_command_long_t command, MAVLink.MAV_CMD_ACK code, byte progress = 255, byte extra = 0)
+        {
+            MAVLink.mavlink_command_ack_t ack = new MAVLink.mavlink_command_ack_t(command.command, (byte)code, progress, extra, command.target_system, command.target_component);
+            SendMessage(MAVLink.MAVLINK_MSG_ID.COMMAND_ACK, ack);
         }
 
         private static void CheckSendHeartbeat()
@@ -213,7 +297,7 @@ namespace TcpServer
                 if (sendMessages.TryDequeue(out byte[] message))
                 {
                     MAVLink.MAVLinkMessage sendMessageTest = new MAVLink.MAVLinkMessage(message);
-                    Console.WriteLine($"Sending {sendMessageTest.msgtypename} {sendMessageTest.payloadlength}");
+                    //Console.WriteLine($"Sending {sendMessageTest.msgtypename} {sendMessageTest.payloadlength}");
                     try
                     {
                         ns.Write(message, 0, message.Length);
