@@ -1,2 +1,2 @@
 # MAVLink-test
-A testbed for emulating ardupilot
+A testbed for using MAVLink in Balsa
