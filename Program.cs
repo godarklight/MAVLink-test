@@ -4,10 +4,12 @@ using System.Collections.Concurrent;
 using System.Net.Sockets;
 using System.Net;
 using System.Threading;
+using UnityEngine;
+using BalsaCore;
 
 namespace AutoPilot
 {
-    [BalsaCore.BalsaAddon]
+    [BalsaAddon]
     class Program 
     {
         private static AutoResetEvent are = new AutoResetEvent(false);
@@ -22,9 +24,13 @@ namespace AutoPilot
         private static long startTime;
         private static Dictionary<MAVLink.MAVLINK_MSG_ID, float> setIntervals = new Dictionary<MAVLink.MAVLINK_MSG_ID, float>();
         private static Dictionary<MAVLink.MAVLINK_MSG_ID, long> nextSend = new Dictionary<MAVLink.MAVLINK_MSG_ID, long>();
+        private static Thread sendThread;
+        private static Thread receiveThread;
+        private static Action<string> Log;
 
         public static void Main()//(string[] args)
         {
+            Log = Console.WriteLine;
             running = true;
             startTime = DateTime.UtcNow.Ticks;
 
@@ -32,13 +38,13 @@ namespace AutoPilot
             TcpListener listener = new TcpListener(ep);
             listener.Start();
 
-            Console.WriteLine(@"Address: " + ep.Address + "\t Port: " + ep.Port);
+            Log(@"Address: " + ep.Address + "\t Port: " + ep.Port);
             sender = listener.AcceptTcpClient();
-            Console.WriteLine("Connected");
+            Log("Connected");
 
-            Thread receiveThread = new Thread(new ThreadStart(ReceiveMain));
+            receiveThread = new Thread(new ThreadStart(ReceiveMain));
             receiveThread.Start();
-            Thread sendThread = new Thread(new ThreadStart(SendMain));
+            sendThread = new Thread(new ThreadStart(SendMain));
             sendThread.Start();
 
             while (running)
@@ -56,7 +62,38 @@ namespace AutoPilot
 
             sendThread.Join();
             receiveThread.Join();
-            Console.WriteLine("Bye!");
+            Log("Bye!");
+        }
+
+        [BalsaAddonInit]
+        public static void ModStart()
+        {
+            Log = Debug.Log;
+            IPEndPoint ep = new IPEndPoint(IPAddress.Any, 5760);
+            TcpListener listener = new TcpListener(ep);
+            listener.Start();
+            listener.BeginAcceptTcpClient(HandleConnect, listener);
+        }
+
+        [BalsaAddonFinalize]
+        public static void ModFinish()
+        {
+            //Don't need to do this but it will prevent these threads running in the background and instead will block balsa so we know something is wrong.
+            if (sendThread != null)
+            {
+                sendThread.Join();
+                receiveThread.Join();
+            }
+        }
+
+        private static void HandleConnect(IAsyncResult ar)
+        {
+            TcpListener listener = ar.AsyncState as TcpListener;
+            sender = listener.EndAcceptTcpClient(ar);
+            receiveThread = new Thread(new ThreadStart(ReceiveMain));
+            receiveThread.Start();
+            sendThread = new Thread(new ThreadStart(SendMain));
+            sendThread.Start();
         }
 
         private static void SendMessage(MAVLink.MAVLINK_MSG_ID messageType, object message)
@@ -68,7 +105,7 @@ namespace AutoPilot
 
         private static void ProcessMessage(MAVLink.MAVLinkMessage message)
         {
-            //Console.WriteLine($"Receiving {message.msgtypename} {message.payloadlength}");
+            //Log($"Receiving {message.msgtypename} {message.payloadlength}");
             bool processed = false;
             if (message.msgtypename == "HEARTBEAT")
             {
@@ -83,7 +120,7 @@ namespace AutoPilot
             {
                 MAVLink.mavlink_request_data_stream_t rds = (MAVLink.mavlink_request_data_stream_t)message.data;
                 processed = true;
-                Console.WriteLine($"Requests stream {(MAVLink.MAV_DATA_STREAM)rds.req_stream_id} at rate {rds.req_message_rate}");
+                Log($"Requests stream {(MAVLink.MAV_DATA_STREAM)rds.req_stream_id} at rate {rds.req_message_rate}");
             }
             if (message.msgtypename == "PARAM_REQUEST_LIST")
             {
@@ -91,7 +128,7 @@ namespace AutoPilot
             }
             if (!processed)
             {
-                Console.WriteLine($"Unprocessed message! {message.msgtypename}");
+                Log($"Unprocessed message! {message.msgtypename}");
             }
         }
 
@@ -105,7 +142,7 @@ namespace AutoPilot
                 AckCommand(command, MAVLink.MAV_CMD_ACK.OK);
                 MAVLink.MAVLINK_MSG_ID commandID = (MAVLink.MAVLINK_MSG_ID)command.param1;
                 setIntervals[commandID] = command.param2;
-                Console.WriteLine($"Command {commandID} set to {command.param2}us");
+                Log($"Command {commandID} set to {command.param2}us");
                 processed = true;
             }
             if (command.command == 519)
@@ -143,7 +180,7 @@ namespace AutoPilot
             if (!processed)
             {
                 AckCommand(command, MAVLink.MAV_CMD_ACK.ERR_NOT_SUPPORTED);
-                Console.WriteLine($"Unprocessed command - {command.command}");
+                Log($"Unprocessed command - {command.command}");
             }
         }
 
@@ -283,7 +320,7 @@ namespace AutoPilot
                 }
                 catch (Exception e)
                 {
-                    Console.WriteLine("Receive error: " + e.Message);
+                    Log("Receive error: " + e.Message);
                     running = false;
                 }
             }
@@ -298,7 +335,7 @@ namespace AutoPilot
                 if (sendMessages.TryDequeue(out byte[] message))
                 {
                     MAVLink.MAVLinkMessage sendMessageTest = new MAVLink.MAVLinkMessage(message);
-                    //Console.WriteLine($"Sending {sendMessageTest.msgtypename} {sendMessageTest.payloadlength}");
+                    //Log($"Sending {sendMessageTest.msgtypename} {sendMessageTest.payloadlength}");
                     try
                     {
                         ns.Write(message, 0, message.Length);

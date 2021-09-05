@@ -361,3 +361,8 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# Balsa DLLS
+External/Managed/*.dll
+External/Managed/*.pdb
+External/Managed/*.mdb

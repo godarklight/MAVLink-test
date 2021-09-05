@@ -1,0 +1,13 @@
+ModCFG
+{
+    title = MAVLink test
+    author = MS26
+    modVersion = 0.1.0
+    Plugin
+    {
+        name = MAVLink test
+        description = MAVLink test
+        asmpath = Addons/MAVLink test/MAVLink test.dll
+        order = 100
+    }
+} 
